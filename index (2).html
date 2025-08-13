@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Bhashni Simplified — OCR Translator with History</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/tesseract.js@5/dist/tesseract.min.js"></script>
+<style>
+  body {
+    background: linear-gradient(180deg,#051226,#04101a);
+    font-family: 'Poppins', sans-serif;
+  }
+  .fade { transition: all 0.3s ease; }
+</style>
+</head>
+<body class="min-h-screen flex items-center justify-center p-4 text-white">
+
+<div class="bg-white/5 backdrop-blur-lg rounded-2xl shadow-2xl max-w-6xl w-full p-6 space-y-6 grid md:grid-cols-[2fr,1fr] gap-6">
+
+  <!-- Main Translator -->
+  <div class="space-y-6">
+
+    <!-- Header -->
+    <div class="flex justify-between items-center">
+      <h1 class="text-xl font-semibold text-white">🌐 Bhashni Translator</h1>
+      <span class="text-xs text-gray-300">Mic/Camera need HTTPS or localhost</span>
+    </div>
+
+    <!-- Source / Target -->
+    <div class="grid md:grid-cols-2 gap-4">
+      <div class="relative">
+        <label class="absolute left-3 top-2 text-gray-400 text-sm">Source</label>
+        <textarea id="src" class="w-full h-40 bg-white/10 text-white rounded-xl p-3 pt-6 outline-none resize-none" placeholder="Type, speak, or use camera..."></textarea>
+      </div>
+      <div class="relative">
+        <label class="absolute left-3 top-2 text-gray-400 text-sm">Translation</label>
+        <textarea id="tgt" class="w-full h-40 bg-white/10 text-white rounded-xl p-3 pt-6 outline-none resize-none" placeholder="Translation appears here" readonly></textarea>
+      </div>
+    </div>
+
+    <!-- Language controls -->
+    <div class="flex flex-wrap gap-3 justify-between items-center">
+      <div class="flex items-center gap-2">
+        <button id="speakSrc" class="fade px-3 py-2 bg-white/10 rounded-lg hover:bg-white/20">🔊</button>
+        <button id="copySrc" class="fade px-3 py-2 bg-white/10 rounded-lg hover:bg-white/20">📋</button>
+        <select id="langFrom" class="bg-white/10 rounded-lg p-2 text-white"></select>
+      </div>
+      <button id="swap" class="fade px-3 py-2 bg-blue-500 rounded-lg hover:bg-blue-600">⇄</button>
+      <div class="flex items-center gap-2">
+        <select id="langTo" class="bg-white/10 rounded-lg p-2 text-white"></select>
+        <button id="speakTgt" class="fade px-3 py-2 bg-white/10 rounded-lg hover:bg-white/20">🔊</button>
+        <button id="copyTgt" class="fade px-3 py-2 bg-white/10 rounded-lg hover:bg-white/20">📋</button>
+      </div>
+    </div>
+
+    <!-- Actions -->
+    <div class="flex flex-wrap gap-3">
+      <button id="translateBtn" class="flex-1 px-4 py-3 bg-gradient-to-r from-pink-500 to-blue-400 rounded-lg font-semibold">Translate</button>
+      <button id="micBtn" class="px-4 py-3 bg-blue-400 rounded-lg font-semibold">🎤 Microphone</button>
+    </div>
+
+    <!-- Camera / OCR controls -->
+    <div class="flex flex-wrap gap-3" id="cameraControls">
+      <button id="uploadBtn" class="px-4 py-3 bg-white/10 rounded-lg hover:bg-white/20">🖼️ Upload</button>
+      <button id="openCamBtn" class="px-4 py-3 bg-white/10 rounded-lg hover:bg-white/20">📷 Camera</button>
+      <button id="captureBtn" class="px-4 py-3 bg-green-500 rounded-lg font-semibold" disabled>⧉ Capture & OCR</button>
+      <button id="closeCamBtn" class="px-4 py-3 bg-red-500 rounded-lg font-semibold" disabled>✕ Stop</button>
+      <span class="text-sm text-gray-300" id="ocrStatus">OCR: idle</span>
+      <progress id="ocrProgress" max="1" value="0" class="hidden"></progress>
+    </div>
+
+    <!-- Camera preview -->
+    <div id="mediaWrap" class="hidden rounded-xl overflow-hidden shadow-lg">
+      <video id="video" playsinline class="w-full max-h-72 bg-black"></video>
+      <canvas id="canvas" class="hidden"></canvas>
+    </div>
+
+  </div>
+
+  <!-- History Panel -->
+  <div class="bg-white/10 rounded-xl p-4 flex flex-col h-full">
+    <div class="flex justify-between items-center mb-3">
+      <h2 class="text-lg font-semibold text-white">📜 History</h2>
+      <button id="clearHistory" class="text-sm text-red-400 hover:underline">Clear</button>
+    </div>
+    <div id="historyList" class="flex-1 overflow-y-auto space-y-3 pr-1 text-sm"></div>
+  </div>
+
+</div>
+
+<!-- Hidden file input -->
+<input type="file" id="imgInput" accept="image/*" capture="environment" hidden>
+
+<div id="toast" class="fixed bottom-6 left-1/2 -translate-x-1/2 bg-black/70 text-white px-4 py-2 rounded-lg hidden"></div>
+
+<script>
+(() => {
+  const src = document.getElementById('src');
+  const tgt = document.getElementById('tgt');
+  const langFrom = document.getElementById('langFrom');
+  const langTo = document.getElementById('langTo');
+  const translateBtn = document.getElementById('translateBtn');
+  const micBtn = document.getElementById('micBtn');
+  const swapBtn = document.getElementById('swap');
+  const speakSrc = document.getElementById('speakSrc');
+  const speakTgt = document.getElementById('speakTgt');
+  const copySrc = document.getElementById('copySrc');
+  const copyTgt = document.getElementById('copyTgt');
+  const toast = document.getElementById('toast');
+  const uploadBtn = document.getElementById('uploadBtn');
+  const openCamBtn = document.getElementById('openCamBtn');
+  const captureBtn = document.getElementById('captureBtn');
+  const closeCamBtn = document.getElementById('closeCamBtn');
+  const imgInput = document.getElementById('imgInput');
+  const video = document.getElementById('video');
+  const canvas = document.getElementById('canvas');
+  const mediaWrap = document.getElementById('mediaWrap');
+  const ocrProgress = document.getElementById('ocrProgress');
+  const ocrStatus = document.getElementById('ocrStatus');
+  const historyList = document.getElementById('historyList');
+  const clearHistoryBtn = document.getElementById('clearHistory');
+
+  const LANGS = {
+    "auto":"Auto-detect",
+    "en":"English","hi":"Hindi","as":"Assamese","bn":"Bengali","mni":"Manipuri","bdo":"Bodo","lus":"Mizo","kha":"Khasi","ne":"Nepali",
+    "or":"Odia","pa":"Punjabi","gu":"Gujarati","ta":"Tamil","te":"Telugu","kn":"Kannada","ml":"Malayalam","ur":"Urdu",
+    "es":"Spanish","fr":"French","de":"German","it":"Italian","ru":"Russian","zh":"Chinese","ja":"Japanese","ko":"Korean","ar":"Arabic","pt":"Portuguese"
+  };
+  const TESSERACT_LANG = {en:'eng', hi:'hin', bn:'ben', as:'asm', ne:'nep', pa:'pan', gu:'guj', or:'ori', ta:'tam', te:'tel', kn:'kan', ml:'mal', ur:'urd', ja:'jpn', zh:'chi_sim', ko:'kor', ru:'rus', es:'spa', fr:'fra', de:'deu', it:'ita', ar:'ara', pt:'por'};
+
+  // ===== History functions =====
+  function getHistory() {
+    return JSON.parse(localStorage.getItem('translationHistory') || '[]');
+  }
+  function saveHistory(history) {
+    localStorage.setItem('translationHistory', JSON.stringify(history));
+  }
+  function addHistory(fromLang, fromText, toLang, toText) {
+    if(!fromText || !toText) return;
+    let history = getHistory();
+    history.unshift({ fromLang, fromText, toLang, toText, time: Date.now() });
+    if(history.length > 50) history.pop(); // Limit to last 50
+    saveHistory(history);
+    renderHistory();
+  }
+  function renderHistory() {
+    historyList.innerHTML = '';
+    let history = getHistory();
+    history.forEach(item => {
+      let div = document.createElement('div');
+      div.className = 'p-2 bg-white/5 rounded-lg cursor-pointer hover:bg-white/10';
+      div.innerHTML = `
+        <div class="text-xs text-gray-400">${LANGS[item.fromLang] || item.fromLang} ➜ ${LANGS[item.toLang] || item.toLang}</div>
+        <div class="font-medium truncate">${item.fromText}</div>
+        <div class="text-gray-300 truncate">${item.toText}</div>
+      `;
+      div.onclick = () => {
+        src.value = item.fromText;
+        tgt.value = item.toText;
+        langFrom.value = item.fromLang;
+        langTo.value = item.toLang;
+      };
+      historyList.appendChild(div);
+    });
+  }
+  clearHistoryBtn.onclick = () => { localStorage.removeItem('translationHistory'); renderHistory(); };
+
+  // ===== Setup languages =====
+  function fillLangs(){
+    for(const [code,label] of Object.entries(LANGS)){
+      const o1 = document.createElement('option'); o1.value = code; o1.text = label;
+      const o2 = o1.cloneNode(true);
+      langFrom.appendChild(o1); langTo.appendChild(o2);
+    }
+    langFrom.value = 'auto'; langTo.value = 'hi';
+  }
+  fillLangs();
+
+  // ===== Toast =====
+  function showToast(msg){
+    toast.textContent = msg;
+    toast.classList.remove('hidden');
+    setTimeout(()=>toast.classList.add('hidden'), 1500);
+  }
+
+  // ===== Speak & Copy =====
+  function speak(text, langCode){
+    if(!text) return;
+    const u = new SpeechSynthesisUtterance(text);
+    if(langCode && langCode!=='auto') { u.lang = langCode.split('-')[0]; }
+    speechSynthesis.cancel(); speechSynthesis.speak(u);
+  }
+  speakSrc.onclick = () => speak(src.value, langFrom.value);
+  speakTgt.onclick = () => speak(tgt.value, langTo.value);
+  copySrc.onclick = () => navigator.clipboard.writeText(src.value).then(()=>showToast('Copied'));
+  copyTgt.onclick = () => navigator.clipboard.writeText(tgt.value).then(()=>showToast('Copied'));
+
+  swapBtn.onclick = () => { [langFrom.value, langTo.value] = [langTo.value, langFrom.value]; [src.value, tgt.value] = [tgt.value, src.value]; showToast('Swapped'); };
+
+  // ===== Translation =====
+  async function fetchTimeout(resource, options = {}, timeout = 9000){
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeout);
+    const res = await fetch(resource, {...options, signal: controller.signal});
+    clearTimeout(id);
+    return res;
+  }
+  async function detectLanguage(text){
+    try {
+      const res = await fetchTimeout('https://libretranslate.de/detect', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({q: text})}, 7000);
+      const j = await res.json();
+      if(j[0]?.language) return j[0].language;
+    } catch(err){}
+    return 'en';
+  }
+  async function translateText(text, from, to){
+    let source = from === 'auto' ? await detectLanguage(text) : from;
+    const short = c => c.split('-')[0];
+    try {
+      const res = await fetchTimeout('https://libretranslate.de/translate', {method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ q: text, source: short(source), target: short(to) })}, 9000);
+      const j = await res.json();
+      if(j.translatedText) return j.translatedText;
+    } catch(err){}
+    const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${short(source)}|${short(to)}`;
+    const res2 = await fetchTimeout(url, {}, 9000);
+    const j2 = await res2.json();
+    return j2?.responseData?.translatedText || '';
+  }
+  translateBtn.onclick = async () => {
+    if(!src.value.trim()) return showToast('Enter or OCR some text');
+    translateBtn.disabled = true; translateBtn.textContent = 'Translating...';
+    try {
+      const translation = await translateText(src.value.trim(), langFrom.value, langTo.value);
+      tgt.value = translation;
+      addHistory(langFrom.value, src.value.trim(), langTo.value, translation);
+      showToast('Translated');
+    } catch(e){ alert('Translation failed.'); }
+    finally { translateBtn.disabled = false; translateBtn.textContent = 'Translate'; }
+  };
+
+  // ===== Mic =====
+  const supportsSTT = ('SpeechRecognition' in window) || ('webkitSpeechRecognition' in window);
+  let recog = null, isListening = false;
+  if(supportsSTT){
+    const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
+    recog = new Rec();
+    recog.interimResults = true;
+    recog.onresult = e => { src.value = Array.from(e.results).map(r => r[0].transcript).join(''); };
+    recog.onend = () => { isListening=false; micBtn.classList.remove('bg-red-500'); micBtn.textContent='🎤 Microphone'; };
+  } else { micBtn.style.display = 'none'; }
+  micBtn.onclick = () => {
+    if(!supportsSTT) return showToast('No speech recognition support');
+    if(isListening){ recog.stop(); isListening=false; micBtn.classList.remove('bg-red-500'); micBtn.textContent='🎤 Microphone'; return; }
+    recog.lang = (langFrom.value === 'auto') ? 'en-US' : langFrom.value.split('-')[0];
+    src.value = ''; recog.start(); isListening=true; micBtn.classList.add('bg-red-500'); micBtn.textContent='🎤 Listening...';
+  };
+
+  // ===== Camera / OCR =====
+  let stream = null;
+  function setOCRState(text, progress=null){ ocrStatus.textContent = text; ocrProgress.classList.toggle('hidden', progress===null); if(progress!==null) ocrProgress.value = progress; }
+  uploadBtn.onclick = () => imgInput.click();
+  imgInput.onchange = e => { if(e.target.files[0]) ocrFile(e.target.files[0]); };
+  openCamBtn.onclick = async () => {
+    try{ stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}}); video.srcObject = stream; await video.play(); mediaWrap.classList.remove('hidden'); captureBtn.disabled=false; closeCamBtn.disabled=false; }
+    catch(err){ alert('Camera error'); }
+  };
+  closeCamBtn.onclick = () => { if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; mediaWrap.classList.add('hidden'); captureBtn.disabled=true; closeCamBtn.disabled=true; } };
+  captureBtn.onclick = () => { if(!video.videoWidth) return; canvas.width=video.videoWidth; canvas.height=video.videoHeight; canvas.getContext('2d').drawImage(video,0,0); canvas.toBlob(b=>ocrFile(b),'image/jpeg',0.9); };
+  async function ocrFile(fileOrBlob){
+    try{
+      setOCRState('OCR: loading', 0);
+      const preferLang = TESSERACT_LANG[(langFrom.value==='auto'?'en':langFrom.value.split('-')[0])] || 'eng';
+      const worker = await Tesseract.createWorker(preferLang, 1, {logger: m => { if(m.status) setOCRState(`OCR: ${m.status}`, m.progress); }});
+      const { data: { text } } = await worker.recognize(fileOrBlob);
+      await worker.terminate();
+      src.value = text.trim();
+      setOCRState('OCR: done', null);
+      translateBtn.click();
+    }catch(err){ alert('OCR failed'); setOCRState('OCR: error', null); }
+  }
+
+  // Load history on start
+  renderHistory();
+})();
+</script>
+</body>
+</html>
